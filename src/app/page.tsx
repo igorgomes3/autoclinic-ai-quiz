@@ -268,6 +268,9 @@ function QuizContent() {
   const debugPerfil = searchParams.get('debug') as ProfileType | null
   const isDebugMode = !!debugPerfil && ['sobrecarga', 'gestao', 'conversao', 'financeiro'].includes(debugPerfil)
 
+  // Rastreamento de afiliado/influencer via ?ref=
+  const influencerRef = searchParams.get('ref') || 'clecio'
+
   // Sync refs com estados
   provaSocialPausedRef.current = provaSocialPaused
   provaSocialIndexRef.current = provaSocialIndex
@@ -1090,7 +1093,8 @@ function QuizContent() {
                           tag_perfil: tagPerfil,
                           checkout_clicado: false,
                           status_compra: 'Não_Comprou',
-                          data_conclusao_quiz: new Date().toISOString()
+                          data_conclusao_quiz: new Date().toISOString(),
+                          influencer_ref: influencerRef
                         })
                       })
 
@@ -1610,14 +1614,14 @@ function QuizContent() {
   if (showResult && perfilPrincipal && showDownsellFromOffer) {
     return (
       <Downsell
-        onAceitar={() => { window.location.href = 'https://app.autoclinicai.com.br/checkout?reseller=clecio&plan=starter&interval=annual&promo=true' }}
+        onAceitar={() => { window.location.href = `https://app.autoclinicai.com.br/checkout?reseller=${influencerRef}&plan=starter&interval=annual&promo=true` }}
         onRecusar={() => handleCheckoutClick()}
       />
     )
   }
 
   if (showResult && perfilPrincipal && showCheckoutFinal) {
-    return <CheckoutFinal plano={planoSelecionado} onCheckout={handleCheckoutClick} />
+    return <CheckoutFinal plano={planoSelecionado} onCheckout={handleCheckoutClick} reseller={influencerRef} />
   }
 
   if (showResult && perfilPrincipal && showEscolhaPlanos) {

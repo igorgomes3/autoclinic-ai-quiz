@@ -19,7 +19,8 @@ export async function POST(request: NextRequest) {
       tag_perfil,
       checkout_clicado,
       status_compra,
-      data_conclusao_quiz
+      data_conclusao_quiz,
+      influencer_ref
     } = body
 
     // Validações básicas
@@ -59,7 +60,8 @@ export async function POST(request: NextRequest) {
           tag_perfil,
           checkout_clicado: checkout_clicado || false,
           status_compra: status_compra || 'Não_Comprou',
-          data_conclusao_quiz: data_conclusao_quiz || new Date().toISOString()
+          data_conclusao_quiz: data_conclusao_quiz || new Date().toISOString(),
+          influencer_ref: influencer_ref || null
         }
       ])
       .select()
