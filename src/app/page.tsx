@@ -1612,16 +1612,17 @@ function QuizContent() {
   }
 
   if (showResult && perfilPrincipal && showDownsellFromOffer) {
+    const couponParam = influencerRef && influencerRef !== 'clecio' ? `&coupon=${influencerRef}` : ''
     return (
       <Downsell
-        onAceitar={() => { window.location.href = `https://app.autoclinicai.com.br/checkout?reseller=${influencerRef}&plan=starter&interval=annual&promo=true` }}
+        onAceitar={() => { window.location.href = `https://app.autoclinicai.com.br/checkout?reseller=clecio&plan=starter&interval=annual&promo=true${couponParam}` }}
         onRecusar={() => handleCheckoutClick()}
       />
     )
   }
 
   if (showResult && perfilPrincipal && showCheckoutFinal) {
-    return <CheckoutFinal plano={planoSelecionado} onCheckout={handleCheckoutClick} reseller={influencerRef} />
+    return <CheckoutFinal plano={planoSelecionado} onCheckout={handleCheckoutClick} influencerRef={influencerRef} />
   }
 
   if (showResult && perfilPrincipal && showEscolhaPlanos) {

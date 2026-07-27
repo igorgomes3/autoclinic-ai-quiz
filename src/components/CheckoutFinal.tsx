@@ -8,7 +8,7 @@ import Downsell from '@/components/Downsell'
 interface CheckoutFinalProps {
   plano?: 'mensal' | 'anual'
   onCheckout?: () => void
-  reseller?: string
+  influencerRef?: string
 }
 
 const SOCIAL_PROOFS = [
@@ -21,7 +21,7 @@ const SOCIAL_PROOFS = [
   { nome: 'Renata Lima', profissao: 'biomédica', estado: 'Goiás' },
 ]
 
-export default function CheckoutFinal({ plano = 'anual', onCheckout, reseller = 'clecio' }: CheckoutFinalProps) {
+export default function CheckoutFinal({ plano = 'anual', onCheckout, influencerRef = 'clecio' }: CheckoutFinalProps) {
   const [showConfirmacao, setShowConfirmacao] = useState(false)
   const [showDownsell, setShowDownsell] = useState(false)
   const [downsellMostrado, setDownsellMostrado] = useState(false)
@@ -78,10 +78,11 @@ export default function CheckoutFinal({ plano = 'anual', onCheckout, reseller = 
     return () => clearTimeout(initialDelay)
   }, [showConfirmacao, showDownsell])
 
+  const couponParam = influencerRef && influencerRef !== 'clecio' ? `&coupon=${influencerRef}` : ''
   const CHECKOUT_URLS = {
-    anual: `https://app.autoclinicai.com.br/checkout?reseller=${reseller}&plan=starter&interval=annual`,
-    mensal: `https://app.autoclinicai.com.br/checkout?reseller=${reseller}&plan=starter`,
-    downsell: `https://app.autoclinicai.com.br/checkout?reseller=${reseller}&plan=starter&interval=annual&promo=true`,
+    anual: `https://app.autoclinicai.com.br/checkout?reseller=clecio&plan=starter&interval=annual${couponParam}`,
+    mensal: `https://app.autoclinicai.com.br/checkout?reseller=clecio&plan=starter${couponParam}`,
+    downsell: `https://app.autoclinicai.com.br/checkout?reseller=clecio&plan=starter&interval=annual&promo=true${couponParam}`,
   }
 
   // Renderização condicional após todos os hooks
