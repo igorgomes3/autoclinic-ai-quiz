@@ -38,6 +38,7 @@ type InfluencerStats = {
   checkout_clicado: number
   compradores: number
   conversao_pct: number
+  faturamento: number
 }
 
 type Tab = 'overview' | 'leads' | 'influencers'
@@ -77,13 +78,34 @@ export default function DashboardPage() {
   const router = useRouter()
   const [tab, setTab] = useState<Tab>('overview')
   const [leads, setLeads] = useState<Lead[]>([])
+  const [stripeSales, setStripeSales] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [stripeLoading, setStripeLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('todos')
   const [filterInfluencer, setFilterInfluencer] = useState('todos')
   const [sortBy, setSortBy] = useState<'created_at' | 'nome' | 'status_compra'>('created_at')
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc')
   const [userEmail, setUserEmail] = useState('')
+
+  const loadStripeSales = useCallback(async (token: string) => {
+    setStripeLoading(true)
+    try {
+      const response = await fetch('/api/admin/stripe-stats', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      const result = await response.json()
+      if (result.success) {
+        setStripeSales(result.sales || [])
+      } else {
+        console.error('Erro ao buscar vendas do Stripe:', result.error)
+      }
+    } catch (err) {
+      console.error('Erro de conexão com o Stripe:', err)
+    } finally {
+      setStripeLoading(false)
+    }
+  }, [])
 
   const loadLeads = useCallback(async () => {
     setLoading(true)
@@ -93,24 +115,52 @@ export default function DashboardPage() {
     setLoading(false)
   }, [sortBy, sortDir])
 
+  const handleRefresh = useCallback(async () => {
+    setLoading(true)
+    setStripeLoading(true)
+    
+    // 1. Carregar leads
+    let query = supabase.from('leads').select('*').order(sortBy, { ascending: sortDir === 'asc' })
+    const { data } = await query
+    setLeads(data ?? [])
+    setLoading(false)
+
+    // 2. Carregar Stripe
+    const { data: { session } } = await supabase.auth.getSession()
+    if (session) {
+      await loadStripeSales(session.access_token)
+    } else {
+      setStripeLoading(false)
+    }
+  }, [sortBy, sortDir, loadStripeSales])
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       if (!data.session) {
         router.push('/admin')
       } else {
         setUserEmail(data.session.user.email ?? '')
-        loadLeads()
+        handleRefresh()
       }
     })
-  }, [router, loadLeads])
+  }, [router, handleRefresh])
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
     router.push('/admin')
   }
 
+  // Cruzar os dados dos leads com as vendas reais do Stripe por email
+  const processedLeads = leads.map(l => {
+    const hasBought = stripeSales.some(sale => sale.email && sale.email.toLowerCase() === l.email.toLowerCase())
+    return {
+      ...l,
+      status_compra: hasBought ? 'Comprou' : l.status_compra
+    }
+  })
+
   // Derived data
-  const filteredLeads = leads.filter(l => {
+  const filteredLeads = processedLeads.filter(l => {
     const matchSearch = search === '' ||
       l.nome.toLowerCase().includes(search.toLowerCase()) ||
       l.email.toLowerCase().includes(search.toLowerCase()) ||
@@ -121,25 +171,38 @@ export default function DashboardPage() {
     return matchSearch && matchStatus && matchInfluencer
   })
 
-  const uniqueInfluencers = [...new Set(leads.map(l => l.influencer_ref ?? 'clecio'))]
+  const uniqueInfluencers = [...new Set(processedLeads.map(l => l.influencer_ref ?? 'clecio'))]
 
   const influencerStats: InfluencerStats[] = uniqueInfluencers.map(ref => {
-    const group = leads.filter(l => (l.influencer_ref ?? 'clecio') === ref)
-    const compradores = group.filter(l => l.status_compra === 'Comprou').length
+    const group = processedLeads.filter(l => (l.influencer_ref ?? 'clecio') === ref)
     const checkoutClicado = group.filter(l => l.checkout_clicado).length
+
+    // Filtrar vendas do Stripe associadas a este influencer (por cupom)
+    const refSales = stripeSales.filter(sale => {
+      if (ref === 'clecio') {
+        return !sale.coupon || sale.coupon === 'clecio'
+      }
+      return sale.coupon === ref.toLowerCase()
+    })
+
+    const compradores = refSales.length
+    const faturamento = refSales.reduce((acc, sale) => acc + sale.amount_total, 0)
+
     return {
       ref,
       total_leads: group.length,
       checkout_clicado: checkoutClicado,
       compradores,
       conversao_pct: group.length > 0 ? Math.round((compradores / group.length) * 100) : 0,
+      faturamento
     }
   }).sort((a, b) => b.total_leads - a.total_leads)
 
   // Overview stats
-  const totalLeads = leads.length
-  const totalCompradores = leads.filter(l => l.status_compra === 'Comprou').length
-  const totalCheckout = leads.filter(l => l.checkout_clicado).length
+  const totalLeads = processedLeads.length
+  const totalCompradores = stripeSales.length // total sales from Stripe
+  const totalCheckout = processedLeads.filter(l => l.checkout_clicado).length
+  const totalFaturamento = stripeSales.reduce((acc, sale) => acc + sale.amount_total, 0)
   const conversionPct = totalLeads > 0 ? ((totalCompradores / totalLeads) * 100).toFixed(1) : '0'
 
   const tabs: { key: Tab; label: string; icon: string }[] = [
@@ -206,11 +269,11 @@ export default function DashboardPage() {
             <p className="text-slate-500 text-xs">{totalLeads} leads no total</p>
           </div>
           <button
-            onClick={loadLeads}
-            disabled={loading}
+            onClick={handleRefresh}
+            disabled={loading || stripeLoading}
             className="flex items-center gap-2 text-xs text-slate-400 hover:text-white border border-white/10 hover:border-white/20 rounded-lg px-3 py-2 transition-all"
           >
-            <svg className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg className={`w-3.5 h-3.5 ${loading || stripeLoading ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
             </svg>
             Atualizar
@@ -224,8 +287,8 @@ export default function DashboardPage() {
             <div className="space-y-8">
               <div className="grid grid-cols-4 gap-4">
                 <StatCard label="Total de Leads" value={totalLeads} sub="todos os tempos" />
-                <StatCard label="Compradores" value={totalCompradores} sub="status = Comprou" color="text-emerald-400" />
-                <StatCard label="Clicaram Checkout" value={totalCheckout} sub="chegaram na oferta" color="text-purple-400" />
+                <StatCard label="Vendas (Stripe)" value={totalCompradores} sub="pagamento confirmado" color="text-emerald-400" />
+                <StatCard label="Faturamento Total" value={`R$ ${totalFaturamento.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`} sub="bruto no Stripe" color="text-purple-400" />
                 <StatCard label="Conversão" value={`${conversionPct}%`} sub="leads → vendas" color={parseFloat(conversionPct) > 5 ? 'text-emerald-400' : 'text-amber-400'} />
               </div>
 
@@ -253,24 +316,28 @@ export default function DashboardPage() {
 
               {/* Top influencers */}
               <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
-                <h3 className="text-sm font-bold text-white mb-4">Top Influencers por Leads</h3>
+                <h3 className="text-sm font-bold text-white mb-4">Top Influencers por Faturamento</h3>
                 <div className="space-y-2">
-                  {influencerStats.slice(0, 5).map(i => (
-                    <div key={i.ref} className="flex items-center justify-between py-2.5 border-b border-white/5 last:border-0">
-                      <div className="flex items-center gap-3">
-                        <div className="w-7 h-7 rounded-full bg-purple-600/20 border border-purple-500/30 flex items-center justify-center text-xs font-bold text-purple-400">
-                          {i.ref.charAt(0).toUpperCase()}
+                  {influencerStats
+                    .filter(i => i.faturamento > 0 || i.total_leads > 0)
+                    .slice(0, 5)
+                    .map(i => (
+                      <div key={i.ref} className="flex items-center justify-between py-2.5 border-b border-white/5 last:border-0">
+                        <div className="flex items-center gap-3">
+                          <div className="w-7 h-7 rounded-full bg-purple-600/20 border border-purple-500/30 flex items-center justify-center text-xs font-bold text-purple-400">
+                            {i.ref.charAt(0).toUpperCase()}
+                          </div>
+                          <span className="text-sm text-white font-medium">?ref={i.ref}</span>
                         </div>
-                        <span className="text-sm text-white font-medium">?ref={i.ref}</span>
+                        <div className="flex items-center gap-6 text-xs text-slate-400">
+                          <span><span className="text-white font-bold">{i.total_leads}</span> leads</span>
+                          <span><span className="text-purple-400 font-bold">{i.checkout_clicado}</span> checkout</span>
+                          <span><span className="text-emerald-400 font-bold">{i.compradores}</span> vendas</span>
+                          <span><span className="text-purple-300 font-bold">R$ {i.faturamento.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></span>
+                          <span className={`font-bold ${i.conversao_pct >= 5 ? 'text-emerald-400' : 'text-slate-400'}`}>{i.conversao_pct}%</span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-6 text-xs text-slate-400">
-                        <span><span className="text-white font-bold">{i.total_leads}</span> leads</span>
-                        <span><span className="text-purple-400 font-bold">{i.checkout_clicado}</span> checkout</span>
-                        <span><span className="text-emerald-400 font-bold">{i.compradores}</span> vendas</span>
-                        <span className={`font-bold ${i.conversao_pct >= 5 ? 'text-emerald-400' : 'text-slate-400'}`}>{i.conversao_pct}%</span>
-                      </div>
-                    </div>
-                  ))}
+                    ))}
                 </div>
               </div>
             </div>
@@ -423,8 +490,9 @@ export default function DashboardPage() {
                       <th className="text-left px-6 py-3.5 text-slate-400 text-xs font-semibold uppercase tracking-wider">Ref</th>
                       <th className="text-left px-6 py-3.5 text-slate-400 text-xs font-semibold uppercase tracking-wider">Total Leads</th>
                       <th className="text-left px-6 py-3.5 text-slate-400 text-xs font-semibold uppercase tracking-wider">Clicaram Checkout</th>
-                      <th className="text-left px-6 py-3.5 text-slate-400 text-xs font-semibold uppercase tracking-wider">Compradores</th>
-                      <th className="text-left px-6 py-3.5 text-slate-400 text-xs font-semibold uppercase tracking-wider">Conversão</th>
+                      <th className="text-left px-6 py-3.5 text-slate-400 text-xs font-semibold uppercase tracking-wider">Compradores (Stripe)</th>
+                      <th className="text-left px-6 py-3.5 text-slate-400 text-xs font-semibold uppercase tracking-wider">Faturamento</th>
+                      <th className="text-left px-6 py-3.5 text-slate-400 text-xs font-semibold uppercase tracking-wider">Conversão Real</th>
                       <th className="text-left px-6 py-3.5 text-slate-400 text-xs font-semibold uppercase tracking-wider">Link do Quiz</th>
                     </tr>
                   </thead>
@@ -450,6 +518,9 @@ export default function DashboardPage() {
                         </td>
                         <td className="px-6 py-4">
                           <span className="text-emerald-400 font-bold">{inf.compradores}</span>
+                        </td>
+                        <td className="px-6 py-4 text-purple-300 font-bold">
+                          R$ {inf.faturamento.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                         </td>
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-2">
