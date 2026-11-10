@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Label } from '@/components/ui/label'
-import { createClient } from '@supabase/supabase-js'
 import DiagnosticoComparacao from '@/components/DiagnosticoComparacao'
 import ProjecaoResultados from '@/components/ProjecaoResultados'
 import ProjecaoClinica from '@/components/ProjecaoClinica'
@@ -17,10 +16,10 @@ import TelaOfertaPrincipal from '@/components/TelaOfertaPrincipal'
 import Downsell from '@/components/Downsell'
 import ConfirmacaoPagamento from '@/components/ConfirmacaoPagamento'
 
-// Cliente Supabase - configurado para usar o projeto VISUALIZA.AI AVI
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
-const supabase = createClient(supabaseUrl, supabaseAnonKey)
+// O cliente Supabase do navegador saiu daqui: nenhuma tela usava, e ele era
+// construído com a chave anon em tempo de build (a chave publicada estava
+// truncada, ou seja, um cliente quebrado indo junto com a página). Quem grava
+// lead são as rotas de API, no servidor.
 
 // Sistema de pontuação por 4 eixos:
 // SOBRECARGA = Operacional Sobrecarregada
@@ -295,6 +294,63 @@ function QuizContent() {
   const [email, setEmail] = useState('')
   const [whatsapp, setWhatsapp] = useState('')
   const [leadId, setLeadId] = useState<string | null>(null)
+
+  // Estado da gravação do lead. Antes, falha de banco morria no console e o
+  // visitante via o diagnóstico como se o cadastro tivesse entrado.
+  const [salvando, setSalvando] = useState(false)
+  const [erroSalvar, setErroSalvar] = useState<string | null>(null)
+
+  /**
+   * Tenta gravar o lead. Devolve true quando o registro entrou.
+   * Onze dígitos no WhatsApp e perfil calculado são pré-requisito.
+   */
+  const salvarLead = async (): Promise<boolean> => {
+    if (whatsapp.replace(/\D/g, '').length !== 11 || !perfilPrincipal) return false
+
+    const tagPerfil = `Perfil_${perfilPrincipal.charAt(0).toUpperCase() + perfilPrincipal.slice(1)}`
+    setSalvando(true)
+    setErroSalvar(null)
+
+    try {
+      const response = await fetch('/api/save-lead', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nome,
+          whatsapp,
+          email,
+          perfil_principal: perfilPrincipal,
+          perfil_secundario: perfilSecundario,
+          score_sobrecarga: finalScores.sobrecarga,
+          score_gestao: finalScores.gestao,
+          score_conversao: finalScores.conversao,
+          score_financeiro: finalScores.financeiro,
+          tag_perfil: tagPerfil,
+          checkout_clicado: false,
+          status_compra: 'Não_Comprou',
+          data_conclusao_quiz: new Date().toISOString(),
+          influencer_ref: influencerRef,
+        }),
+      })
+
+      const result = await response.json().catch(() => ({}))
+
+      if (!response.ok || !result.success) {
+        console.error('Erro ao salvar lead:', result.error, result.codigo)
+        setErroSalvar('Não conseguimos salvar seus dados agora.')
+        return false
+      }
+
+      if (result.data?.id) setLeadId(result.data.id)
+      return true
+    } catch (err) {
+      console.error('Erro ao processar quiz:', err)
+      setErroSalvar('Não conseguimos salvar seus dados agora.')
+      return false
+    } finally {
+      setSalvando(false)
+    }
+  }
 
   const progress = ((currentQuestion + 1) / quizQuestions.length) * 100
   const isLastQuestion = currentQuestion === quizQuestions.length - 1
@@ -973,10 +1029,10 @@ function QuizContent() {
               {/* Título */}
               <div className="text-center mb-8">
                 <h1 className="text-3xl md:text-4xl font-bold text-foreground leading-tight mb-4">
-                  Para onde devo enviar sua análise detalhada?
+                  Qual é o seu melhor email?
                 </h1>
                 <p className="text-xl text-muted-foreground">
-                  Seu resultado ficará salvo no seu email.
+                  Ele fica junto do seu diagnóstico — o resultado aparece na tela.
                 </p>
               </div>
 
@@ -1039,7 +1095,7 @@ function QuizContent() {
                   Último passo para liberar seu diagnóstico completo.
                 </h1>
                 <p className="text-xl text-muted-foreground">
-                  Seu diagnóstico e plano estratégico serão enviados no WhatsApp.
+                  Seu diagnóstico aparece na tela na sequência. O WhatsApp fica como contato seu.
                 </p>
               </div>
 
@@ -1067,64 +1123,56 @@ function QuizContent() {
                 )}
               </div>
 
+              {/* Falha ao salvar: antes isso morria no console */}
+              {erroSalvar && (
+                <div className="mb-6 rounded-xl border-2 border-red-300 bg-red-50 p-4 text-left">
+                  <p className="font-semibold text-red-700">{erroSalvar}</p>
+                  <p className="mt-1 text-sm text-red-700/80">
+                    Seus dados não foram registrados. Você pode tentar de novo agora.
+                  </p>
+                  <Button
+                    size="lg"
+                    onClick={async () => {
+                      const salvou = await salvarLead()
+                      if (salvou) {
+                        setShowCaptureWhatsApp(false)
+                        setShowResult(true)
+                      }
+                    }}
+                    disabled={salvando || !whatsappValido}
+                    className="mt-3 w-full text-base font-bold py-5 bg-red-600 hover:bg-red-700 text-white disabled:opacity-50"
+                  >
+                    {salvando ? 'Tentando…' : 'Tentar de novo'}
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCaptureWhatsApp(false)
+                      setShowResult(true)
+                    }}
+                    className="mt-2 w-full text-sm text-red-700/80 underline"
+                  >
+                    Ver meu diagnóstico mesmo assim
+                  </button>
+                </div>
+              )}
+
               {/* Botão */}
               <Button
                 size="lg"
                 onClick={async () => {
-                  if (whatsappValido && perfilPrincipal) {
-                    try {
-                      // Criar tag automática baseada no perfil principal
-                      const tagPerfil = `Perfil_${perfilPrincipal.charAt(0).toUpperCase() + perfilPrincipal.slice(1)}`
-
-                      // Salvar lead via API route (bypass do cache do PostgREST)
-                      const response = await fetch('/api/save-lead', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          nome: nome,
-                          whatsapp: whatsapp,
-                          email: email,
-                          perfil_principal: perfilPrincipal,
-                          perfil_secundario: perfilSecundario,
-                          score_sobrecarga: finalScores.sobrecarga,
-                          score_gestao: finalScores.gestao,
-                          score_conversao: finalScores.conversao,
-                          score_financeiro: finalScores.financeiro,
-                          tag_perfil: tagPerfil,
-                          checkout_clicado: false,
-                          status_compra: 'Não_Comprou',
-                          data_conclusao_quiz: new Date().toISOString(),
-                          influencer_ref: influencerRef
-                        })
-                      })
-
-                      const result = await response.json()
-
-                      if (!response.ok || result.error) {
-                        console.error('Erro ao salvar lead:', result.error)
-                      } else {
-                        console.log('✅ Lead capturado e salvo no banco!', result.data)
-                        // Salvar ID do lead para rastreamento posterior
-                        if (result.data) {
-                          setLeadId(result.data.id)
-                        }
-                      }
-
-                      // Liberar resultado
-                      setShowCaptureWhatsApp(false)
-                      setShowResult(true)
-                    } catch (err) {
-                      console.error('Erro ao processar quiz:', err)
-                      // Mesmo com erro, liberar resultado para não bloquear o usuário
-                      setShowCaptureWhatsApp(false)
-                      setShowResult(true)
-                    }
+                  const salvou = await salvarLead()
+                  // Sem gravação o visitante fica nesta tela: ele vê o erro e
+                  // pode tentar de novo. Sair daqui sem salvar era o bug.
+                  if (salvou) {
+                    setShowCaptureWhatsApp(false)
+                    setShowResult(true)
                   }
                 }}
-                disabled={!whatsappValido}
+                disabled={!whatsappValido || salvando}
                 className="w-full text-lg font-bold py-7 bg-gradient-to-br from-purple-700 to-purple-600 hover:from-purple-800 hover:to-purple-700 text-white disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_6px_20px_rgba(126,34,206,0.35)] hover:shadow-[0_8px_28px_rgba(126,34,206,0.45)] hover:scale-105 transition-all"
               >
-                Liberar meu diagnóstico
+                {salvando ? 'Salvando…' : 'Liberar meu diagnóstico'}
               </Button>
             </CardContent>
           </Card>
